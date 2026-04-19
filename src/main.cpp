@@ -7,16 +7,21 @@
 
 // --- QuickSort Hilfsfunktion ---
 int partition(std::vector<int>& arr, int low, int high) {
+    // Median-of-three pivot to avoid worst-case on sorted input
+    int mid = low + (high - low) / 2;
+    if (arr[mid] < arr[low])  std::swap(arr[mid], arr[low]);
+    if (arr[high] < arr[low]) std::swap(arr[high], arr[low]);
+    if (arr[mid] < arr[high]) std::swap(arr[mid], arr[high]);
     int pivot = arr[high];
-    int i = (low - 1);
-    for (int j = low; j <= high - 1; j++) {
-        if (arr[j] < pivot) {
-            i++;
+    int i = low - 1;
+    for (int j = low; j < high; j++) {
+        if (arr[j] <= pivot) {
+            ++i;
             std::swap(arr[i], arr[j]);
         }
     }
     std::swap(arr[i + 1], arr[high]);
-    return (i + 1);
+    return i + 1;
 }
 
 // --- QuickSort (Sequentiell) ---
@@ -32,12 +37,11 @@ void quickSortSeq(std::vector<int>& arr, int low, int high) {
 void quickSortNaive(std::vector<int>& arr, int low, int high) {
     if (low < high) {
         int pi = partition(arr, low, high);
-
-        #pragma omp task 
+        #pragma omp task default(none) shared(arr) firstprivate(low, pi)
         quickSortNaive(arr, low, pi - 1);
-
-        #pragma omp task 
+        #pragma omp task default(none) shared(arr) firstprivate(pi, high)
         quickSortNaive(arr, pi + 1, high);
+        #pragma omp taskwait
     }
 }
 
@@ -72,14 +76,11 @@ void mergeSortSeq(std::vector<int>& arr, int l, int r) {
 void mergeSortNaive(std::vector<int>& arr, int l, int r) {
     if (l < r) {
         int m = l + (r - l) / 2;
-
-        #pragma omp task 
+        #pragma omp task default(none) shared(arr) firstprivate(l, m)
         mergeSortNaive(arr, l, m);
-
-        #pragma omp task 
+        #pragma omp task default(none) shared(arr) firstprivate(m, r)
         mergeSortNaive(arr, m + 1, r);
-
-        #pragma omp taskwait 
+        #pragma omp taskwait
         merge(arr, l, m, r);
     }
 }
