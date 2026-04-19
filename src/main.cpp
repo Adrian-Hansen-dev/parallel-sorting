@@ -85,6 +85,37 @@ void mergeSortNaive(std::vector<int>& arr, int l, int r) {
     }
 }
 
+// --- Paralleles QuickSort mit Schwellwert ---
+void quickSortThreshold(std::vector<int>& arr, int low, int high, int threshold) {
+    if (low >= high) return;
+    if (high - low < threshold) {
+        quickSortSeq(arr, low, high);
+        return;
+    }
+    int pi = partition(arr, low, high);
+    #pragma omp task default(none) shared(arr) firstprivate(low, pi, threshold)
+    quickSortThreshold(arr, low, pi - 1, threshold);
+    #pragma omp task default(none) shared(arr) firstprivate(pi, high, threshold)
+    quickSortThreshold(arr, pi + 1, high, threshold);
+    #pragma omp taskwait
+}
+
+// --- Paralleles MergeSort mit Schwellwert ---
+void mergeSortThreshold(std::vector<int>& arr, int l, int r, int threshold) {
+    if (l >= r) return;
+    if (r - l < threshold) {
+        mergeSortSeq(arr, l, r);
+        return;
+    }
+    int m = l + (r - l) / 2;
+    #pragma omp task default(none) shared(arr) firstprivate(l, m, threshold)
+    mergeSortThreshold(arr, l, m, threshold);
+    #pragma omp task default(none) shared(arr) firstprivate(m, r, threshold)
+    mergeSortThreshold(arr, m + 1, r, threshold);
+    #pragma omp taskwait
+    merge(arr, l, m, r);
+}
+
 // --- Hilfsfunktionen ---
 void fillRandom(std::vector<int>& arr, int size) {
     arr.clear();
