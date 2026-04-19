@@ -5,7 +5,7 @@
 #include <chrono>
 #include <omp.h>
 
-// --- QuickSort (In-Place) ---
+// --- QuickSort Hilfsfunktion ---
 int partition(std::vector<int>& arr, int low, int high) {
     int pivot = arr[high];
     int i = (low - 1);
@@ -19,15 +19,29 @@ int partition(std::vector<int>& arr, int low, int high) {
     return (i + 1);
 }
 
-void quickSort(std::vector<int>& arr, int low, int high) {
+// --- QuickSort (Sequentiell) ---
+void quickSortSeq(std::vector<int>& arr, int low, int high) {
     if (low < high) {
         int pi = partition(arr, low, high);
-        quickSort(arr, low, pi - 1);
-        quickSort(arr, pi + 1, high);
+        quickSortSeq(arr, low, pi - 1);
+        quickSortSeq(arr, pi + 1, high);
     }
 }
 
-// --- MergeSort ---
+// --- Naives Paralleles QuickSort ---
+void quickSortNaive(std::vector<int>& arr, int low, int high) {
+    if (low < high) {
+        int pi = partition(arr, low, high);
+
+        #pragma omp task 
+        quickSortNaive(arr, low, pi - 1);
+
+        #pragma omp task 
+        quickSortNaive(arr, pi + 1, high);
+    }
+}
+
+// --- MergeSort Hilfsfunktion ---
 void merge(std::vector<int>& arr, int l, int m, int r) {
     int n1 = m - l + 1;
     int n2 = r - m;
@@ -44,44 +58,93 @@ void merge(std::vector<int>& arr, int l, int m, int r) {
     while (j < n2) arr[k++] = R[j++];
 }
 
-void mergeSort(std::vector<int>& arr, int l, int r) {
+// --- MergeSort (Sequentiell) ---
+void mergeSortSeq(std::vector<int>& arr, int l, int r) {
     if (l < r) {
         int m = l + (r - l) / 2;
-        mergeSort(arr, l, m);
-        mergeSort(arr, m + 1, r);
+        mergeSortSeq(arr, l, m);
+        mergeSortSeq(arr, m + 1, r);
         merge(arr, l, m, r);
     }
 }
 
-// --- Hilfsfunktionen für Benchmarking ---
+// --- Naives Paralleles MergeSort ---
+void mergeSortNaive(std::vector<int>& arr, int l, int r) {
+    if (l < r) {
+        int m = l + (r - l) / 2;
+
+        #pragma omp task 
+        mergeSortNaive(arr, l, m);
+
+        #pragma omp task 
+        mergeSortNaive(arr, m + 1, r);
+
+        #pragma omp taskwait 
+        merge(arr, l, m, r);
+    }
+}
+
+// --- Hilfsfunktionen ---
 void fillRandom(std::vector<int>& arr, int size) {
-    std::mt19937 gen(42); // Fester Seed für Vergleichbarkeit 
+    arr.clear();
+    std::mt19937 gen(42); 
     std::uniform_int_distribution<> dis(1, 1000000);
     for (int i = 0; i < size; ++i) arr.push_back(dis(gen));
 }
 
 int main() {
-    const int DATA_SIZE = 100000; // Ausreichend große Datenmenge [cite: 10, 16]
-    
-    // QuickSort Benchmark
-    std::vector<int> dataQS;
-    fillRandom(dataQS, DATA_SIZE);
-    
-    double startQS = omp_get_wtime();
-    quickSort(dataQS, 0, dataQS.size() - 1);
-    double endQS = omp_get_wtime();
-    
-    std::cout << "QuickSort (Sequentiell): " << (endQS - startQS) << " Sekunden" << std::endl;
+    const int DATA_SIZE = 100000; 
+    std::vector<int> originalData;
+    fillRandom(originalData, DATA_SIZE);
 
-    // MergeSort Benchmark
-    std::vector<int> dataMS;
-    fillRandom(dataMS, DATA_SIZE);
+    std::vector<int> data;
+    double start, end;
+
+    std::cout << "Benchmark mit " << DATA_SIZE << " Elementen auf " 
+              << omp_get_max_threads() << " Threads.\n" << std::endl;
+
+    // --- QUICK SORT ---
+    std::cout << "--- QuickSort ---" << std::endl;
     
-    double startMS = omp_get_wtime();
-    mergeSort(dataMS, 0, dataMS.size() - 1);
-    double endMS = omp_get_wtime();
-    
-    std::cout << "MergeSort (Sequentiell): " << (endMS - startMS) << " Sekunden" << std::endl;
+    // Sequentiell
+    data = originalData;
+    start = omp_get_wtime();
+    quickSortSeq(data, 0, data.size() - 1);
+    end = omp_get_wtime();
+    std::cout << "Sequentiell: " << (end - start) << " Sek." << std::endl;
+
+    // Parallel
+    data = originalData;
+    start = omp_get_wtime();
+    #pragma omp parallel
+    {
+        #pragma omp single
+        quickSortNaive(data, 0, data.size() - 1);
+    }
+    end = omp_get_wtime();
+    std::cout << "Parallel:     " << (end - start) << " Sek.\n" << std::endl;
+
+
+    // --- MERGE SORT ---
+    std::cout << "--- MergeSort ---" << std::endl;
+
+    // Sequentiell
+    data = originalData;
+    start = omp_get_wtime();
+    mergeSortSeq(data, 0, data.size() - 1);
+    end = omp_get_wtime();
+    std::cout << "Sequentiell: " << (end - start) << " Sek." << std::endl;
+
+    // Parallel
+    data = originalData;
+    start = omp_get_wtime();
+    #pragma omp parallel
+    {
+        #pragma omp single
+        mergeSortNaive(data, 0, data.size() - 1);
+    }
+    end = omp_get_wtime();
+    std::cout << "Parallel:     " << (end - start) << " Sek." << std::endl;
 
     return 0;
 }
