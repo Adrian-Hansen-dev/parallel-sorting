@@ -37,28 +37,27 @@ void quickSortSeq(std::vector<int>& arr, int low, int high) {
     }
 }
 
-void merge(std::vector<int>& arr, int l, int m, int r) {
+// buf must be a pre-allocated scratch buffer of the same size as arr.
+// Each recursive call uses the slice buf[l..r], which is disjoint across
+// parallel tasks — no allocator contention, no false sharing of live data.
+void merge(std::vector<int>& arr, int* buf, int l, int m, int r) {
     int n1 = m - l + 1;
-    int n2 = r - m;
-    std::vector<int> L(n1), R(n2);
-    for (int i = 0; i < n1; i++) L[i] = arr[l + i];
-    for (int j = 0; j < n2; j++) R[j] = arr[m + 1 + j];
+    // Copy only the left half into the scratch slice; right half stays in arr.
+    for (int i = 0; i < n1; i++) buf[l + i] = arr[l + i];
 
-    int i = 0, j = 0, k = l;
-    while (i < n1 && j < n2) {
-        if (L[i] <= R[j]) arr[k++] = L[i++];
-        else               arr[k++] = R[j++];
-    }
-    while (i < n1) arr[k++] = L[i++];
-    while (j < n2) arr[k++] = R[j++];
+    int i = l, j = m + 1, k = l;
+    while (i <= m && j <= r)
+        arr[k++] = (buf[i] <= arr[j]) ? buf[i++] : arr[j++];
+    while (i <= m) arr[k++] = buf[i++];
+    // Remaining right-half elements are already in place.
 }
 
-void mergeSortSeq(std::vector<int>& arr, int l, int r) {
+void mergeSortSeq(std::vector<int>& arr, int* buf, int l, int r) {
     if (l < r) {
         int m = l + (r - l) / 2;
-        mergeSortSeq(arr, l, m);
-        mergeSortSeq(arr, m + 1, r);
-        merge(arr, l, m, r);
+        mergeSortSeq(arr, buf, l, m);
+        mergeSortSeq(arr, buf, m + 1, r);
+        merge(arr, buf, l, m, r);
     }
 }
 
@@ -77,15 +76,15 @@ void quickSortNaive(std::vector<int>& arr, int low, int high) {
     }
 }
 
-void mergeSortNaive(std::vector<int>& arr, int l, int r) {
+void mergeSortNaive(std::vector<int>& arr, int* buf, int l, int r) {
     if (l < r) {
         int m = l + (r - l) / 2;
-        #pragma omp task default(none) shared(arr) firstprivate(l, m)
-        mergeSortNaive(arr, l, m);
-        #pragma omp task default(none) shared(arr) firstprivate(m, r)
-        mergeSortNaive(arr, m + 1, r);
+        #pragma omp task default(none) shared(arr, buf) firstprivate(l, m)
+        mergeSortNaive(arr, buf, l, m);
+        #pragma omp task default(none) shared(arr, buf) firstprivate(m, r)
+        mergeSortNaive(arr, buf, m + 1, r);
         #pragma omp taskwait
-        merge(arr, l, m, r);
+        merge(arr, buf, l, m, r);
     }
 }
 
@@ -108,20 +107,19 @@ void quickSortThreshold(std::vector<int>& arr, int low, int high, int threshold)
     #pragma omp taskwait
 }
 
-void mergeSortThreshold(std::vector<int>& arr, int l, int r, int threshold) {
+void mergeSortThreshold(std::vector<int>& arr, int* buf, int l, int r, int threshold) {
     if (l >= r) return;
     if (r - l < threshold) {
-        // Fall back to sequential below the threshold
-        mergeSortSeq(arr, l, r);
+        mergeSortSeq(arr, buf, l, r);
         return;
     }
     int m = l + (r - l) / 2;
-    #pragma omp task default(none) shared(arr) firstprivate(l, m, threshold)
-    mergeSortThreshold(arr, l, m, threshold);
-    #pragma omp task default(none) shared(arr) firstprivate(m, r, threshold)
-    mergeSortThreshold(arr, m + 1, r, threshold);
+    #pragma omp task default(none) shared(arr, buf) firstprivate(l, m, threshold)
+    mergeSortThreshold(arr, buf, l, m, threshold);
+    #pragma omp task default(none) shared(arr, buf) firstprivate(m, r, threshold)
+    mergeSortThreshold(arr, buf, m + 1, r, threshold);
     #pragma omp taskwait
-    merge(arr, l, m, r);
+    merge(arr, buf, l, m, r);
 }
 
 // ============================================================
@@ -183,6 +181,7 @@ int main() {
     for (int size : sizes) {
         std::vector<int> orig;
         fillRandom(orig, size);
+        std::vector<int> buf(size);  // scratch buffer — allocated once per size, reused across runs
 
         // QuickSort sequential
         double tQSeq = benchMin([&](){
@@ -201,7 +200,7 @@ int main() {
         // MergeSort sequential
         double tMSeq = benchMin([&](){
             auto data = orig;
-            mergeSortSeq(data, 0, (int)data.size() - 1);
+            mergeSortSeq(data, buf.data(), 0, (int)data.size() - 1);
         }, NUM_RUNS);
 
         // MergeSort naive parallel
@@ -209,7 +208,7 @@ int main() {
             auto data = orig;
             #pragma omp parallel num_threads(NUM_THREADS)
             #pragma omp single nowait
-            mergeSortNaive(data, 0, (int)data.size() - 1);
+            mergeSortNaive(data, buf.data(), 0, (int)data.size() - 1);
         }, NUM_RUNS);
 
         // Verify correctness once
@@ -217,7 +216,7 @@ int main() {
         quickSortSeq(dataCheck, 0, (int)dataCheck.size() - 1);
         bool qOk = isSorted(dataCheck);
         dataCheck = orig;
-        mergeSortSeq(dataCheck, 0, (int)dataCheck.size() - 1);
+        mergeSortSeq(dataCheck, buf.data(), 0, (int)dataCheck.size() - 1);
         bool mOk = isSorted(dataCheck);
 
         auto row = [&](const std::string& alg, const std::string& mode, double t, double base, bool ok){
@@ -244,6 +243,7 @@ int main() {
     const int BENCH_SIZE = 2'000'000;
     std::vector<int> orig;
     fillRandom(orig, BENCH_SIZE);
+    std::vector<int> buf(BENCH_SIZE);  // scratch buffer for all mergesort variants
 
     std::cout << "\n=== Threshold Sweep (size=" << BENCH_SIZE << ", " << NUM_THREADS << " threads) ===\n";
     std::cout << std::left
@@ -261,7 +261,7 @@ int main() {
 
     double tMSeqBase = benchMin([&](){
         auto data = orig;
-        mergeSortSeq(data, 0, (int)data.size() - 1);
+        mergeSortSeq(data, buf.data(), 0, (int)data.size() - 1);
     }, NUM_RUNS);
 
     std::cout << std::fixed << std::setprecision(6)
@@ -284,7 +284,7 @@ int main() {
             auto data = orig;
             #pragma omp parallel num_threads(NUM_THREADS)
             #pragma omp single nowait
-            mergeSortThreshold(data, 0, (int)data.size() - 1, thr);
+            mergeSortThreshold(data, buf.data(), 0, (int)data.size() - 1, thr);
         }, NUM_RUNS);
 
         std::cout << std::setw(12) << "QuickSort"
